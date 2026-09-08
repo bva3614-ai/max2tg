@@ -286,6 +286,76 @@ class TestMaxClientInit:
         assert c2.chat_ids == []
 
 
+class TestSenderFilter:
+    """MAX_SENDER_IDS forwards one person only — everyone else must be dropped silently."""
+
+    def _client_with_recorder(self, **kwargs):
+        seen = []
+
+        c = MaxClient(token="tok", device_id="dev", **kwargs)
+
+        @c.on_message
+        async def record(msg):
+            seen.append(msg.sender_id)
+
+        return c, seen
+
+    def test_sender_ids_parsed_and_not_shared_between_instances(self):
+        c1 = MaxClient(token="tok", device_id="dev", sender_ids=" 7 , 8 ")
+        c2 = MaxClient(token="tok", device_id="dev")
+        assert c1.sender_ids == [7, 8]
+        assert c2.sender_ids == []
+
+    @pytest.mark.asyncio
+    async def test_whitelisted_sender_passes(self):
+        c, seen = self._client_with_recorder(sender_ids="7")
+
+        c.process_message({"chatId": -1, "message": {"id": "a", "sender": 7, "text": "hi"}})
+        await asyncio.sleep(0)
+
+        assert seen == [7]
+
+    @pytest.mark.asyncio
+    async def test_other_senders_are_dropped(self):
+        c, seen = self._client_with_recorder(sender_ids="7")
+
+        c.process_message({"chatId": -1, "message": {"id": "a", "sender": 9, "text": "hi"}})
+        c.process_message({"chatId": -1, "message": {"id": "b", "sender": 7, "text": "hi"}})
+        await asyncio.sleep(0)
+
+        assert seen == [7]
+
+    @pytest.mark.asyncio
+    async def test_several_senders_allowed(self):
+        c, seen = self._client_with_recorder(sender_ids="7,9")
+
+        for sid in (7, 9, 11):
+            c.process_message({"chatId": -1, "message": {"id": f"m{sid}", "sender": sid, "text": "hi"}})
+        await asyncio.sleep(0)
+
+        assert seen == [7, 9]
+
+    @pytest.mark.asyncio
+    async def test_unset_filter_forwards_everyone(self):
+        c, seen = self._client_with_recorder()
+
+        for sid in (7, 9):
+            c.process_message({"chatId": -1, "message": {"id": f"m{sid}", "sender": sid, "text": "hi"}})
+        await asyncio.sleep(0)
+
+        assert seen == [7, 9]
+
+    @pytest.mark.asyncio
+    async def test_filter_combines_with_chat_ids(self):
+        c, seen = self._client_with_recorder(chat_ids="-1", sender_ids="7")
+
+        c.process_message({"chatId": -2, "message": {"id": "a", "sender": 7, "text": "hi"}})
+        c.process_message({"chatId": -1, "message": {"id": "b", "sender": 7, "text": "hi"}})
+        await asyncio.sleep(0)
+
+        assert seen == [7]
+
+
 class TestMaskSensitive:
     def test_masks_token_field_in_json(self):
         text = '{"token":"secret-value","x":1}'

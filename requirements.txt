@@ -1,4 +1,7 @@
-aiohttp>=3.9.0
-python-telegram-bot>=21.0
-python-dotenv>=1.0.0
-httpx[socks]>=0.24.0
+# Pinned exactly: an unpinned range means any rebuild can pull a freshly
+# published (or compromised) release straight into a process that holds the
+# Max session token. Bump these deliberately, not implicitly.
+aiohttp==3.14.3
+python-telegram-bot==22.8
+python-dotenv==1.2.3
+httpx[socks]==0.28.1

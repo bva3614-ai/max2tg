@@ -105,7 +105,8 @@ class MaxClient:
     CATCHUP_LIMIT = 100
     SEEN_IDS_MAX = 2000
 
-    def __init__(self, token: str, device_id: str, chat_ids: str | None = None, debug: bool = False):
+    def __init__(self, token: str, device_id: str, chat_ids: str | None = None,
+                 sender_ids: str | None = None, debug: bool = False):
         self.token = token
         self.device_id = device_id
         self.debug = debug
@@ -128,6 +129,10 @@ class MaxClient:
         self.chat_ids: list[int] = []
         if chat_ids:
             self.chat_ids.extend(map(int, map(str.strip, chat_ids.split(','))))
+        # Authors whose messages are forwarded. Empty means everyone is forwarded.
+        self.sender_ids: list[int] = []
+        if sender_ids:
+            self.sender_ids.extend(map(int, map(str.strip, sender_ids.split(','))))
 
     # ── decorator API ──────────────────────────────────────────────
 
@@ -352,6 +357,9 @@ class MaxClient:
         if msg is None or msg.update_time is not None:
             return
         if self.chat_ids and msg.chat_id not in self.chat_ids:
+            return
+        if self.sender_ids and msg.sender_id not in self.sender_ids:
+            log.info("Skipping message from sender=%s (not in MAX_SENDER_IDS)", msg.sender_id)
             return
         if self._already_seen(msg.message_id):
             log.debug("Skipping duplicate message id=%s", msg.message_id)

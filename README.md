@@ -81,6 +81,7 @@ cp .env.example .env
 | `MAX_TOKEN`     | да           | Токен авторизации Max                          |
 | `MAX_DEVICE_ID` | да           | ID устройства Max                              |
 | `MAX_CHAT_IDS`  | нет          | список ID чатов Max, разделенных запятой       |
+| `MAX_SENDER_IDS` | нет         | пересылать только сообщения этих авторов (ID пользователей Max через запятую). Не задан — пересылаются все |
 | `TG_BOT_TOKEN`  | да           | Токен Telegram-бота                            |
 | `TG_CHAT_ID`    | да           | ID чата, куда пересылать сообщения. Можно несколько через запятую — каждый получит все сообщения |
 | `TG_ROUTES`     | нет          | Сужает поток для отдельных получателей: `<чат TG>:<чат Max>[,<чат Max>...]`, записи через `;`. Кого здесь нет — получает всё |
@@ -92,6 +93,63 @@ cp .env.example .env
 | `TG_WRITE_TIMEOUT` | нет       | Таймаут отправки обычного запроса к Telegram, в секундах |
 | `TG_MEDIA_WRITE_TIMEOUT` | нет | Таймаут загрузки медиафайлов в Telegram, в секундах. Увеличьте, если файлы отправляются повторно из-за медленного прокси |
 | `TG_MAX_RETRIES` | нет | Сколько раз повторить отправку сразу, прежде чем положить сообщение в очередь повторов (по умолчанию 4) |
+
+### Пересылать сообщения только от одного человека
+
+`MAX_SENDER_IDS` оставляет только сообщения указанных авторов — всё остальное отбрасывается, ещё до отправки в Telegram:
+
+```env
+MAX_SENDER_IDS=1234567
+```
+
+#### Как узнать ID пользователя Max
+
+ID — это число, которого нет в интерфейсе Max; его видно только в логе бота. Порядок такой:
+
+1. **Откройте лог `logs/max2tg.log`.** Включать какой-то особый режим не нужно: список «ID → имя» бот выгружает при каждом запуске, независимо от настроек, и дальше пишет по строке на каждое сообщение. Если бот уже работал хоть раз — всё нужное уже в логе, перезапускать его незачем.
+
+   Лога ещё нет? Запустите бота обычным способом (локально на Windows — `start.cmd`, в Docker — `docker-compose up -d`) и дайте ему минуту на подключение. В Docker лог виден и через `docker-compose logs -f`.
+
+2. **Найдите человека по имени** — тому самому, которым подписаны пересланные сообщения в Telegram:
+
+   Windows (PowerShell):
+   ```powershell
+   Select-String -Path logs\max2tg.log -Pattern 'Resolved contact.*Иван' -Encoding utf8
+   ```
+   Linux / macOS:
+   ```bash
+   grep "Resolved contact" logs/max2tg.log | grep "Иван"
+   ```
+   В ответе будет строка вида:
+   ```
+   [app.resolver] INFO: Resolved contact 1234567 → Иван Иванов
+   ```
+   Число `1234567` — это и есть нужный ID.
+
+   > `-Encoding utf8` в PowerShell обязателен, иначе русские имена превратятся в кракозябры и поиск ничего не найдёт.
+
+3. **Если имени в логе нет** (человека нет в контактах — бот показывает его голым числом), найдите его по тексту любого его сообщения:
+
+   ```powershell
+   Select-String -Path logs\max2tg.log -Pattern 'New message.*добрый вечер' -Encoding utf8
+   ```
+   ```
+   [app.max_listener] INFO: New message: chat=-758802053 sender=1234567 is_self=False text='добрый вечер! …'
+   ```
+   Значение `sender=` — это ID автора сообщения.
+
+   Можно и наоборот: строка `Resolved users: {1234567: 'Иван Иванов', 7654321: 'Мария', …}` пишется при каждом старте и содержит сразу весь список «ID → имя».
+
+4. **Впишите ID в `.env` и перезапустите бота:**
+   ```env
+   MAX_SENDER_IDS=1234567
+   ```
+
+5. **Проверьте.** В логе чужие сообщения теперь отмечаются строкой `Skipping message from sender=<id>`, а в Telegram приходят только сообщения выбранного человека. Если не приходит вообще ничего — скорее всего ID неверный; убирать переменную для проверки не надо: ID всех отфильтрованных авторов видны в тех же строках `Skipping message from sender=<id>`.
+
+#### Область действия
+
+Фильтр работает во всех чатах сразу. Чтобы ограничить его одним чатом, добавьте `MAX_CHAT_IDS` — тогда бот слушает только этот чат и внутри него только этого автора. Отфильтрованные сообщения видны в логе строкой `Skipping message from sender=<id>`, так что ошибочный ID заметен сразу. Свои собственные сообщения бот не пересылает в любом случае.
 
 ## Запуск
 
@@ -211,7 +269,14 @@ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -Ru
 Register-ScheduledTask -TaskName "max2tg" -Action $action -Trigger @($logon,$watchdog) -Settings $settings -Principal $principal
 ```
 
-`pythonw.exe` запускает бота без окна консоли. `IgnoreNew` не даёт запустить второй экземпляр, пока работает первый, поэтому сторож безопасен. Задача стартует при входе пользователя в систему — если компьютер перезагрузился и никто не залогинился, бот не поднимется.
+`pythonw.exe` запускает бота без окна консоли. `IgnoreNew` не даёт задаче запустить второй экземпляр, пока работает первый, поэтому сторож безопасен. Задача стартует при входе пользователя в систему — если компьютер перезагрузился и никто не залогинился, бот не поднимется.
+
+> **Не добавляйте вдобавок ярлык в «Автозагрузку».** `IgnoreNew` учитывает только экземпляры
+> самой задачи и о процессе, запущенном ярлыком, не знает: два бота подключатся к Max
+> независимо и продублируют каждое сообщение в Telegram. Второй экземпляр теперь откажется
+> стартовать из-за файла блокировки `logs/max2tg.lock` и запишет в лог
+> `Refusing to start: another instance already holds ...`, но лишний автозапуск всё равно
+> лучше убрать.
 
 Управление: `Start-ScheduledTask max2tg`, `Stop-ScheduledTask max2tg`, `Get-ScheduledTaskInfo max2tg`.
 
@@ -382,6 +447,7 @@ cp .env.example .env
 | `MAX_TOKEN` | yes | Max auth token |
 | `MAX_DEVICE_ID` | yes | Max device ID |
 | `MAX_CHAT_IDS` | no | Comma-separated list of Max chat IDs to listen to (all chats if unset) |
+| `MAX_SENDER_IDS` | no | Forward only messages written by these Max users (comma-separated user IDs). Every author is forwarded if unset |
 | `TG_BOT_TOKEN` | yes | Telegram bot token |
 | `TG_CHAT_ID` | yes | Chat ID to forward messages to. Several ids may be listed comma-separated — each one receives every message |
 | `TG_ROUTES` | no | Narrows what individual recipients get: `<tg chat>:<max chat>[,<max chat>...]`, entries separated by `;`. A recipient absent from here receives everything |
@@ -393,6 +459,63 @@ cp .env.example .env
 | `TG_WRITE_TIMEOUT` | no | HTTP write timeout for regular Telegram requests, in seconds |
 | `TG_MEDIA_WRITE_TIMEOUT` | no | Upload timeout for media files to Telegram, in seconds. Increase if files are sent multiple times due to a slow proxy |
 | `TG_MAX_RETRIES` | no | How many times a send is retried inline before it goes to the retry queue (default: 4) |
+
+### Forwarding one person only
+
+`MAX_SENDER_IDS` keeps messages written by the listed authors and drops everything else before it ever reaches Telegram:
+
+```env
+MAX_SENDER_IDS=1234567
+```
+
+#### How to find a Max user ID
+
+The ID is a number the Max interface never shows — it only appears in the bot's log. Here is how to get it:
+
+1. **Open the log at `logs/max2tg.log`.** No special mode is needed: the bot dumps the "ID → name" table on every startup regardless of settings, and then logs one line per message. If the bot has run even once, everything you need is already in the log — no restart required.
+
+   No log yet? Start the bot the usual way (`start.cmd` locally on Windows, `docker-compose up -d` under Docker) and give it a minute to connect. Under Docker the log is also visible via `docker-compose logs -f`.
+
+2. **Look the person up by name** — the same name that signs their forwarded messages in Telegram:
+
+   Windows (PowerShell):
+   ```powershell
+   Select-String -Path logs\max2tg.log -Pattern 'Resolved contact.*John' -Encoding utf8
+   ```
+   Linux / macOS:
+   ```bash
+   grep "Resolved contact" logs/max2tg.log | grep "John"
+   ```
+   The answer looks like this:
+   ```
+   [app.resolver] INFO: Resolved contact 1234567 → John Smith
+   ```
+   The number `1234567` is the ID you need.
+
+   > `-Encoding utf8` is required in PowerShell — without it non-ASCII names turn into garbage and the search finds nothing.
+
+3. **If the name is not in the log** (the person is not in your contacts, so the bot shows a bare number), find them by the text of any message they sent:
+
+   ```powershell
+   Select-String -Path logs\max2tg.log -Pattern 'New message.*good evening' -Encoding utf8
+   ```
+   ```
+   [app.max_listener] INFO: New message: chat=-758802053 sender=1234567 is_self=False text='good evening! …'
+   ```
+   The `sender=` value is the author's ID.
+
+   The other way round works too: every startup logs `Resolved users: {1234567: 'John Smith', 7654321: 'Mary', …}` — the whole "ID → name" table at once.
+
+4. **Put the ID into `.env` and restart the bot:**
+   ```env
+   MAX_SENDER_IDS=1234567
+   ```
+
+5. **Verify.** Other people's messages are now logged as `Skipping message from sender=<id>`, and Telegram receives only the chosen person's messages. If nothing arrives at all the ID is probably wrong — you do not have to remove the variable to check: every filtered author's ID is right there in those `Skipping message from sender=<id>` lines.
+
+#### Scope
+
+The filter applies to every chat at once. To scope it to a single chat, add `MAX_CHAT_IDS`: the bot then listens to that chat only, and inside it to that author only. Filtered messages are logged as `Skipping message from sender=<id>`, so a wrong ID shows up immediately. Your own messages are never forwarded either way.
 
 ## Running
 

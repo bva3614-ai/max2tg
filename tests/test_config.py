@@ -131,6 +131,35 @@ class TestLoadSettingsValid:
 
 
 # ---------------------------------------------------------------------------
+# MAX_SENDER_IDS — forward one author only
+# ---------------------------------------------------------------------------
+
+class TestSenderFilter:
+    def test_unset_means_every_author(self):
+        s = _load_settings_with_env(_env())
+        assert s.max_sender_ids is None
+        assert s.max_sender_id_list == []
+
+    def test_single_sender(self):
+        s = _load_settings_with_env(_env(MAX_SENDER_IDS="1234567"))
+        assert s.max_sender_id_list == ["1234567"]
+
+    def test_several_senders_and_whitespace(self):
+        s = _load_settings_with_env(_env(MAX_SENDER_IDS=" 111 , 222 "))
+        assert s.max_sender_id_list == ["111", "222"]
+
+    def test_empty_string_means_every_author(self):
+        s = _load_settings_with_env(_env(MAX_SENDER_IDS=""))
+        assert s.max_sender_ids is None
+
+    def test_non_numeric_sender_raises(self):
+        # A typo here would mute every chat, so it must not pass silently.
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(MAX_SENDER_IDS="Ivan"))
+        assert "not a valid Max user id" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
 # load_settings — missing required variables
 # ---------------------------------------------------------------------------
 

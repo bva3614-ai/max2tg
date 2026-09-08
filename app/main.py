@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 
 from telegram import Update
 
+from app import single_instance
 from app.config import load_settings
 from app.max_listener import create_max_client
 from app.tg_handler import build_tg_app
@@ -65,6 +66,14 @@ async def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING if not settings.debug else logging.DEBUG)
 
+    # Kept referenced for the lifetime of main(): dropping the handle would
+    # release the lock and let a second copy double every forwarded message.
+    try:
+        _instance_lock = single_instance.acquire(os.path.join(log_dir, "max2tg.lock"))
+    except single_instance.AlreadyRunning as exc:
+        log.error("Refusing to start: %s", exc)
+        return
+
     log.info("Debug mode: %s", "ON" if settings.debug else "OFF")
 
     if settings.tg_proxy:
@@ -84,6 +93,7 @@ async def main():
 
     client = create_max_client(
         settings.max_token, settings.max_device_id, sender, settings.max_chat_ids,
+        max_sender_ids=settings.max_sender_ids,
         debug=settings.debug, reply_enabled=settings.reply_enabled,
     )
 
