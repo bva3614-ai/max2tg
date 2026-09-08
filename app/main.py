@@ -95,6 +95,7 @@ async def main():
         settings.max_token, settings.max_device_id, sender, settings.max_chat_ids,
         max_sender_ids=settings.max_sender_ids,
         debug=settings.debug, reply_enabled=settings.reply_enabled,
+        notify_state_path=os.path.join(log_dir, "notify-state.json"),
     )
 
     tg_app = None

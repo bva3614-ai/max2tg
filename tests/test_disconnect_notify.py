@@ -35,7 +35,7 @@ class TestDisconnectThrottle:
         t0 = datetime(2026, 4, 5, 10, 0, 0)
         t1 = datetime(2026, 4, 5, 10, 30, 0)  # 30 min later
 
-        with patch("app.max_listener.datetime") as mock_dt:
+        with patch("app.notify_state.datetime") as mock_dt:
             mock_dt.now.return_value = t0
             await client._on_disconnect_cb()
 
@@ -51,7 +51,7 @@ class TestDisconnectThrottle:
         t0 = datetime(2026, 4, 5, 10, 0, 0)
         t1 = datetime(2026, 4, 5, 11, 0, 1)  # 1 hour + 1 sec later
 
-        with patch("app.max_listener.datetime") as mock_dt:
+        with patch("app.notify_state.datetime") as mock_dt:
             mock_dt.now.return_value = t0
             await client._on_disconnect_cb()
 
@@ -68,7 +68,7 @@ class TestDisconnectThrottle:
         t1 = datetime(2026, 4, 5, 11, 0, 1)  # +1h: 2nd notification
         t2 = datetime(2026, 4, 5, 12, 0, 0)  # +1h after 2nd: suppressed
 
-        with patch("app.max_listener.datetime") as mock_dt:
+        with patch("app.notify_state.datetime") as mock_dt:
             mock_dt.now.return_value = t0
             await client._on_disconnect_cb()
 
@@ -88,7 +88,7 @@ class TestDisconnectThrottle:
         t1 = datetime(2026, 4, 5, 11, 0, 1)  # 2nd notification
         t2 = datetime(2026, 4, 5, 14, 0, 2)  # +3h after 2nd: 3rd notification
 
-        with patch("app.max_listener.datetime") as mock_dt:
+        with patch("app.notify_state.datetime") as mock_dt:
             mock_dt.now.return_value = t0
             await client._on_disconnect_cb()
 
@@ -109,7 +109,7 @@ class TestDisconnectThrottle:
         t2 = datetime(2026, 4, 5, 14, 0, 2)   # 3rd notification
         t3 = datetime(2026, 4, 5, 20, 0, 0)   # 6h later: suppressed
 
-        with patch("app.max_listener.datetime") as mock_dt:
+        with patch("app.notify_state.datetime") as mock_dt:
             mock_dt.now.return_value = t0
             await client._on_disconnect_cb()
             mock_dt.now.return_value = t1
@@ -131,7 +131,7 @@ class TestDisconnectThrottle:
         t2 = datetime(2026, 4, 5, 14, 0, 2)
         t3 = datetime(2026, 4, 6, 14, 0, 3)   # +24h after 3rd: sends
 
-        with patch("app.max_listener.datetime") as mock_dt:
+        with patch("app.notify_state.datetime") as mock_dt:
             mock_dt.now.return_value = t0
             await client._on_disconnect_cb()
             mock_dt.now.return_value = t1
@@ -174,8 +174,34 @@ class TestReconnectNotification:
         snapshot = {"profile": {"id": 1, "names": []}, "chats": []}
         # First connect
         await client._on_ready_cb(snapshot)
-        # Reconnect
+        # Losing the connection is what makes regaining it worth announcing.
+        await client._on_disconnect_cb()
         sender.send_status.reset_mock()
         await client._on_ready_cb(snapshot)
         sender.send_status.assert_called_once()
         assert "восстановлено" in sender.send_status.call_args[0][0]
+
+    async def test_restore_silent_when_loss_was_throttled(self):
+        """A suppressed loss must not produce a lone 'restored' notice.
+
+        This is the 3826-vs-1101 imbalance in the production log: restores were
+        announced unconditionally, so throttled losses still got an "all good"
+        message they never earned.
+        """
+        client, sender = _make_client()
+        snapshot = {"profile": {"id": 1, "names": []}, "chats": []}
+        await client._on_ready_cb(snapshot)
+
+        t0 = datetime(2026, 4, 5, 10, 0, 0)
+        t1 = datetime(2026, 4, 5, 10, 5, 0)  # inside the quiet period
+        with patch("app.notify_state.datetime") as mock_dt:
+            mock_dt.now.return_value = t0
+            await client._on_disconnect_cb()      # announced
+            await client._on_ready_cb(snapshot)   # restore announced, pair closed
+
+            mock_dt.now.return_value = t1
+            await client._on_disconnect_cb()      # throttled, nothing sent
+            sender.send_status.reset_mock()
+            await client._on_ready_cb(snapshot)
+
+        sender.send_status.assert_not_called()

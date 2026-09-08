@@ -1,10 +1,10 @@
 import logging
 import time
-from datetime import datetime
 from html import escape
 from typing import Any
 
 from app.max_client import MaxClient, MaxMessage, OpCode
+from app.notify_state import NotifyState
 from app.resolver import ContactResolver
 from app.tg_sender import ScopedSender, SendStatus, TelegramSender, reply_keyboard
 
@@ -257,6 +257,7 @@ def _human_size(n: int) -> str:
 def create_max_client(
     max_token: str, max_device_id: str, sender: TelegramSender, max_chat_ids: str | None = None,
     max_sender_ids: str | None = None, debug: bool = False, reply_enabled: bool = False,
+    notify_state_path: str | None = None,
 ) -> MaxClient:
     client = MaxClient(
         token=max_token, device_id=max_device_id, debug=debug,
@@ -265,19 +266,8 @@ def create_max_client(
     resolver = ContactResolver(client=client)
 
     _first_connect = True
-    _notif_count = 0
-    _last_notif_time: datetime | None = None
-    _last_auth_alert: datetime | None = None
-
-    def _can_notify() -> bool:
-        if _last_notif_time is None:
-            return True
-        elapsed = (datetime.now() - _last_notif_time).total_seconds()
-        if _notif_count == 1:
-            return elapsed >= 3600    # 2-е: через 1 час
-        if _notif_count == 2:
-            return elapsed >= 10800   # 3-е: через 3 часа
-        return elapsed >= 86400       # 4-е и далее: раз в сутки
+    # Survives restarts: see the module docstring for why that matters.
+    notices = NotifyState(notify_state_path)
 
     @client.on_ready
     async def handle_ready(snapshot: dict):
@@ -293,7 +283,9 @@ def create_max_client(
             log.info("Known users: %s", resolver.users)
 
         if not _first_connect:
-            await sender.send_status("✅ <b>Max:</b> соединение восстановлено")
+            if notices.should_announce_restore():
+                await sender.send_status("✅ <b>Max:</b> соединение восстановлено")
+                notices.record_restore()
             # Re-read everything sent while we were away. The window covers the whole gap,
             # not just the reconnect delay; duplicates are filtered by id in MaxClient.
             now = time.time()
@@ -319,22 +311,18 @@ def create_max_client(
 
     @client.on_disconnect
     async def handle_disconnect():
-        nonlocal _notif_count, _last_notif_time
-        if not _can_notify():
+        if not notices.should_announce_loss():
             log.info("Disconnect notification suppressed (throttle)")
             return
-        _notif_count += 1
-        _last_notif_time = datetime.now()
+        notices.record_loss()
         await sender.send_status("⚠️ <b>Max:</b> соединение потеряно, переподключение...")
 
     @client.on_auth_error
     async def handle_auth_error(payload: dict):
-        nonlocal _last_auth_alert
         log.error("Max authorization failed: %s", payload)
-        now = datetime.now()
-        if _last_auth_alert and (now - _last_auth_alert).total_seconds() < AUTH_ALERT_INTERVAL_SEC:
+        if not notices.should_alert_auth(AUTH_ALERT_INTERVAL_SEC):
             return
-        _last_auth_alert = now
+        notices.record_auth_alert()
         reason = payload.get("error") or payload.get("message") if isinstance(payload, dict) else None
         await sender.send_status(
             "⛔️ <b>Max:</b> ошибка авторизации — обновите <code>MAX_TOKEN</code>"
