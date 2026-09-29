@@ -131,10 +131,14 @@ class TelegramSender:
         return sum(len(r.outbox) for r in self._recipients)
 
     async def start(self):
-        await self._bot.initialize()
+        # Bot.initialize() calls get_me() itself, so it must sit inside the try: outside it,
+        # a network failure at startup crashed the bot before a single message was queued.
         try:
-            me = await self._bot.get_me()
-            log.info("Telegram bot ready: @%s → %s", me.username, ", ".join(self.chat_ids))
+            await self._bot.initialize()
+            log.info("Telegram bot ready: @%s → %s", self._bot.bot.username, ", ".join(self.chat_ids))
+        except InvalidToken:
+            # A wrong TG_BOT_TOKEN will never start working — fail loudly instead of queueing forever.
+            raise
         except Exception as e:
             # Telegram may be unreachable at startup; sends are queued until it is back.
             log.error("Telegram unreachable at startup (%s): %s", type(e).__name__, e)

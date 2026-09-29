@@ -132,6 +132,11 @@ if __name__ == "__main__":
         loop.run_until_complete(main())
     except KeyboardInterrupt:
         log.info("Stopped.")
+    except Exception:
+        # Under pythonw there is no console: without this the traceback vanishes
+        # and the log shows a start that simply never went anywhere.
+        log.exception("Fatal error, bot stopped")
+        raise
     finally:
         try:
             loop.run_until_complete(loop.shutdown_asyncgens())

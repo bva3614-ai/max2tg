@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telegram.constants import PollLimit
-from telegram.error import BadRequest, TimedOut
+from telegram.error import BadRequest, InvalidToken, NetworkError, TimedOut
 
 from app.tg_sender import OUTBOX_MAX_ITEMS, SendStatus, TelegramSender, _Recipient
 
@@ -375,3 +375,39 @@ class TestStatusNotices:
         await sender.send_status("connection restored")
 
         assert _sent_to(sender, "222") == ["connection restored"]
+
+
+class TestStart:
+    """Telegram being down at startup must not kill the bot — see Bot.initialize() calling get_me()."""
+
+    @pytest.mark.asyncio
+    async def test_unreachable_telegram_does_not_crash_startup(self):
+        sender = _make_sender()
+        sender._bot.initialize = AsyncMock(side_effect=NetworkError("getaddrinfo failed"))
+        sender._bot.shutdown = AsyncMock()
+
+        await sender.start()
+
+        assert sender._flusher is not None
+        await sender.stop()
+
+    @pytest.mark.asyncio
+    async def test_sends_after_failed_startup_are_queued(self):
+        sender = _make_sender()
+        sender._bot.initialize = AsyncMock(side_effect=TimedOut())
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+        sender._bot.shutdown = AsyncMock()
+
+        await sender.start()
+        status = await sender.send("hello")
+
+        assert status is SendStatus.QUEUED
+        await sender.stop()
+
+    @pytest.mark.asyncio
+    async def test_invalid_bot_token_still_fails_loudly(self):
+        sender = _make_sender()
+        sender._bot.initialize = AsyncMock(side_effect=InvalidToken())
+
+        with pytest.raises(InvalidToken):
+            await sender.start()
