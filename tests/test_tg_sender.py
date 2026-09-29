@@ -1,6 +1,6 @@
 """Tests for app/tg_sender.py — poll formatting and delivery/outbox behaviour."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from telegram.constants import PollLimit
@@ -15,6 +15,7 @@ def _make_sender(max_retries: int = 1, chat_ids: tuple[str, ...] = ("123",)) -> 
     sender._bot = MagicMock()
     sender._bot.send_poll = AsyncMock()
     sender._bot.send_message = AsyncMock()
+    sender._bot.send_video = AsyncMock()
     sender._recipients = [_Recipient(c) for c in chat_ids]
     sender._max_retries = max_retries
     sender._flusher = None
@@ -411,3 +412,42 @@ class TestStart:
 
         with pytest.raises(InvalidToken):
             await sender.start()
+
+
+class TestSendVideo:
+    @pytest.mark.asyncio
+    async def test_reports_ok_on_success(self):
+        sender = _make_sender()
+        sender._bot.send_video.return_value = MagicMock()
+
+        result = await sender.send_video(b"data", caption="cap")
+
+        assert result is SendStatus.OK
+
+    @pytest.mark.asyncio
+    async def test_reports_dropped_when_telegram_rejects_upload(self):
+        sender = _make_sender()
+        sender._bot.send_video.side_effect = BadRequest("Request Entity Too Large")
+
+        result = await sender.send_video(b"data", caption="cap")
+
+        assert result is SendStatus.DROPPED
+        assert sender.outbox_size == 0
+
+
+class TestTelegramSenderInit:
+    def test_default_base_url_not_overridden(self):
+        with patch("app.tg_sender.Bot") as bot_cls:
+            TelegramSender(token="t", chat_id="1")
+
+        kwargs = bot_cls.call_args.kwargs
+        assert "base_url" not in kwargs
+        assert "base_file_url" not in kwargs
+
+    def test_custom_base_url_passed_to_bot(self):
+        with patch("app.tg_sender.Bot") as bot_cls:
+            TelegramSender(token="t", chat_id="1", base_url="http://localhost:8081")
+
+        kwargs = bot_cls.call_args.kwargs
+        assert kwargs["base_url"] == "http://localhost:8081/bot"
+        assert kwargs["base_file_url"] == "http://localhost:8081/file/bot"

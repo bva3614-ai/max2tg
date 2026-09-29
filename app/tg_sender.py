@@ -101,9 +101,13 @@ class TelegramSender:
             media_write_timeout: int | None = None,
             max_retries: int | None = None,
             routes: Mapping[str, Iterable[str]] | None = None,
+            base_url: str | None = None,
     ):
         request = HTTPXRequest(proxy=proxy_url, read_timeout=read_timeout, write_timeout=write_timeout, media_write_timeout=media_write_timeout)
-        self._bot = Bot(token=token, request=request)
+        if base_url:
+            self._bot = Bot(token=token, request=request, base_url=base_url+"/bot", base_file_url=base_url+"/file/bot")
+        else:
+            self._bot = Bot(token=token, request=request)
         raw_ids = [chat_id] if isinstance(chat_id, str) else list(chat_id)
         # Accept both a parsed list and a raw "111,222" env value.
         ids = [part.strip() for raw in raw_ids for part in str(raw).split(",") if part.strip()]

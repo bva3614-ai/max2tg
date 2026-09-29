@@ -78,6 +78,8 @@ async def main():
 
     if settings.tg_proxy:
         log.info("Using Telegram proxy: %s", settings.tg_proxy.split("@")[-1])
+    if settings.tg_base_url:
+        log.info("Using Telegram base url: %s", settings.tg_base_url)
 
     sender = TelegramSender(
         settings.tg_bot_token,
@@ -88,6 +90,7 @@ async def main():
         media_write_timeout=settings.tg_media_write_timeout,
         max_retries=settings.tg_max_retries,
         routes=settings.tg_route_map,
+        base_url=settings.tg_base_url,
     )
     await sender.start()
 
@@ -101,7 +104,8 @@ async def main():
     tg_app = None
     if settings.reply_enabled:
         tg_app = build_tg_app(settings.tg_bot_token, client, settings.tg_chat_ids,
-                              proxy_url=settings.tg_proxy, read_timeout=settings.tg_read_timeout, write_timeout=settings.tg_write_timeout)
+                              proxy_url=settings.tg_proxy, read_timeout=settings.tg_read_timeout, write_timeout=settings.tg_write_timeout,
+                              base_url=settings.tg_base_url)
         await tg_app.initialize()
         await tg_app.start()
         await tg_app.updater.start_polling(
